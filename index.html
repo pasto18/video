@@ -69,6 +69,45 @@ textarea::placeholder{color:var(--muted)}
 .done-btn.is{background:var(--card);color:var(--ok)}
 .nav{width:52px;height:52px;border-radius:50%;background:var(--card);font-size:20px;display:grid;place-items:center}
 .nav:disabled{opacity:.3}
+.tile .tags{position:absolute;left:6px;right:6px;bottom:6px;display:none;gap:4px;flex-wrap:wrap}
+.tile .tags span{background:rgba(0,0,0,.6);backdrop-filter:blur(6px);font-size:11px;padding:2px 8px;border-radius:99px}
+.chip.tag{background:transparent;border:1px solid var(--line)}
+.chip.tag.on{background:var(--text);border-color:var(--text)}
+.chip.tag small{opacity:.6;margin-left:4px}
+.tagbar{display:flex;gap:6px;align-items:center;overflow-x:auto;scrollbar-width:none;min-height:34px}
+.tagbar .t{display:flex;align-items:center;gap:6px;background:var(--text);color:var(--bg);border-radius:99px;
+  padding:5px 6px 5px 12px;font-size:14px;white-space:nowrap}
+.tagbar .t b{font-weight:400;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.15);display:grid;place-items:center;font-size:12px}
+.tagbar input{flex:1;min-width:130px;border:0;outline:0;background:var(--card);color:var(--text);font:inherit;font-size:16px;
+  padding:6px 14px;border-radius:99px;height:34px}
+.tagbar input::placeholder{color:var(--muted)}
+.sug{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.sug:empty{display:none}
+.sug button{padding:4px 12px;border-radius:99px;border:1px dashed var(--line);color:var(--muted);font-size:13px;white-space:nowrap}
+.size{display:none;width:110px;accent-color:#f2f2f3}
+.tile.dragging{opacity:.35}
+.tile.dl{box-shadow:-5px 0 0 var(--ok)}
+.tile.dr{box-shadow:5px 0 0 var(--ok)}
+#dropzone{position:fixed;inset:10px;border:2px dashed var(--ok);border-radius:var(--r);background:rgba(14,14,16,.85);
+  display:grid;place-items:center;font-size:20px;z-index:40;pointer-events:none}
+
+/* ---------- escritorio ---------- */
+@media (min-width:800px){
+  header{padding:18px 24px 10px}
+  .chips{padding:4px 24px 12px}
+  #grid{padding:0 24px 110px;grid-template-columns:repeat(auto-fill,minmax(var(--min,280px),1fr));gap:14px}
+  .tile{aspect-ratio:16/9;cursor:grab}
+  .tile img{object-fit:contain}
+  .tile .tags{display:flex}
+  .size{display:block}
+  #viewer{display:grid;grid-template-columns:1fr 380px;grid-template-rows:auto 1fr;padding-top:0}
+  #viewer .bar{grid-column:1/-1;padding:10px 16px}
+  #stage{grid-row:2;padding:0 8px 24px 24px}
+  .panel{grid-row:2;grid-column:2;padding:0 24px 24px 12px;justify-content:flex-start;overflow-y:auto}
+  textarea{height:140px}
+  .row{order:-1}
+}
+@media (pointer:fine){ #orderBtn{display:none} }
 #syncBtn.spin{animation:spin 1s linear infinite;color:var(--text)}
 @keyframes spin{to{transform:rotate(360deg)}}
 #toast{position:fixed;left:50%;top:calc(60px + env(safe-area-inset-top));transform:translateX(-50%);background:#2a2a2e;padding:10px 16px;
@@ -82,6 +121,7 @@ textarea::placeholder{color:var(--muted)}
   <header>
     <h1>Tomas <small id="progress"></small></h1>
     <div style="display:flex;gap:8px">
+      <input type="range" class="size" id="size" min="160" max="560" step="10" title="Tamaño">
       <button class="chip hidden" id="syncBtn" aria-label="Sincronizar">↻</button>
       <button class="chip mode" id="orderBtn">Ordenar</button>
     </div>
@@ -91,6 +131,7 @@ textarea::placeholder{color:var(--muted)}
     <button class="chip" data-f="todo">Pendientes</button>
     <button class="chip" data-f="done">Hechas</button>
   </div>
+  <div class="chips hidden" id="tagChips"></div>
   <div id="grid"></div>
   <div class="fab" id="fab">
     <button class="pill" id="addBtn">＋ Añadir fotos</button>
@@ -106,6 +147,8 @@ textarea::placeholder{color:var(--muted)}
   </div>
   <div id="stage"><img id="bigImg" alt=""><span class="badge hidden" id="badge">Hecha</span></div>
   <div class="panel">
+    <div class="tagbar" id="tagbar"></div>
+    <div class="sug" id="sug"></div>
     <textarea id="noteTxt" placeholder="Anotación…"></textarea>
     <div class="row">
       <button class="nav" id="prevBtn" aria-label="Anterior">‹</button>
@@ -117,6 +160,8 @@ textarea::placeholder{color:var(--muted)}
 
 <input type="file" id="file" accept="image/*" multiple hidden>
 <div id="toast"></div>
+<div id="dropzone" class="hidden">Suelta las imágenes para añadirlas</div>
+<datalist id="tagOpts"></datalist>
 
 <script src="config.js"></script>
 <script>
@@ -147,13 +192,23 @@ const DB = (() => {
 let items = [];          // sorted by order
 let filter = 'all';
 let ordering = false;
+let tagFilter = new Set();
 let selectedId = null;   // item picked while ordering
 let current = -1;        // index in visible list while in viewer
 const urls = new Map();  // id -> {thumb, full}
 
 const $ = id => document.getElementById(id);
 const byId = id => items.find(i => i.id === id);
-const visible = () => items.filter(i => filter === 'all' || (filter === 'done') === i.done);
+const visible = () => items.filter(i =>
+  (filter === 'all' || (filter === 'done') === i.done) &&
+  (!tagFilter.size || (i.tags || []).some(t => tagFilter.has(t))));
+const allTags = () => {
+  const m = new Map();
+  items.forEach(i => (i.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+  return [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+};
+const FINE = matchMedia('(pointer:fine)').matches;
+const esc = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const url = (i, k) => {
   let u = urls.get(i.id) || {};
   if (!u[k]) u[k] = URL.createObjectURL(i[k]);
@@ -193,9 +248,9 @@ async function addFiles(files) {
       const src = await load(f);
       const item = {
         id: crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + n,
-        order: base++, done: false, note: '', dirty: true, uploaded: false, v: 0,
+        order: base++, done: false, note: '', tags: [], dirty: true, uploaded: false, v: 0,
         full: await scaled(src, 2400, 0.9),
-        thumb: await scaled(src, 420, 0.8),
+        thumb: await scaled(src, 640, 0.82),
       };
       added.push(item);
     } catch (e) { toast('No pude leer ' + f.name); }
@@ -231,20 +286,65 @@ function render() {
   vis.forEach((it, idx) => {
     const d = document.createElement('div');
     d.className = 'tile' + (it.done ? ' done' : '') + (it.id === selectedId ? ' sel' : '');
-    d.innerHTML = `<img src="${url(it, 'thumb')}" alt=""><span class="n">${items.indexOf(it) + 1}</span>` +
-      (it.note ? '<span class="note"></span>' : '');
+    d.innerHTML = `<img src="${url(it, DESK ? 'full' : 'thumb')}" alt="" decoding="async" loading="lazy"><span class="n">${items.indexOf(it) + 1}</span>` +
+      (it.note ? '<span class="note"></span>' : '') +
+      ((it.tags || []).length ? `<div class="tags">${it.tags.map(t => `<span>${esc(t)}</span>`).join('')}</div>` : '');
     d.onclick = () => ordering ? tapOrder(it) : openViewer(idx);
+    if (FINE) wireDrag(d, it);
     g.appendChild(d);
   });
+  renderTagChips();
+}
+const DESK = matchMedia('(min-width:800px)').matches;
+function renderTagChips() {
+  const tags = allTags(), box = $('tagChips');
+  [...tagFilter].forEach(t => { if (!tags.some(x => x[0] === t)) tagFilter.delete(t); });
+  box.classList.toggle('hidden', !tags.length);
+  box.innerHTML = tags.map(([t, n]) =>
+    `<button class="chip tag${tagFilter.has(t) ? ' on' : ''}" data-t="${esc(t)}">${esc(t)}<small>${n}</small></button>`).join('');
+  box.querySelectorAll('.chip').forEach(c => c.onclick = () => {
+    const t = c.dataset.t;
+    tagFilter.has(t) ? tagFilter.delete(t) : tagFilter.add(t);
+    render();
+  });
+  $('tagOpts').innerHTML = tags.map(([t]) => `<option value="${esc(t)}">`).join('');
+}
+
+/* drag & drop (ratón) */
+let dragId = null;
+function wireDrag(d, it) {
+  d.draggable = true;
+  const side = e => { const r = d.getBoundingClientRect(); return e.clientX > r.left + r.width / 2; };
+  d.ondragstart = e => {
+    dragId = it.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', it.id);
+    requestAnimationFrame(() => d.classList.add('dragging'));
+  };
+  d.ondragend = () => { dragId = null; document.querySelectorAll('.tile').forEach(t => t.classList.remove('dragging', 'dl', 'dr')); };
+  d.ondragover = e => {
+    if (!dragId || dragId === it.id) return;
+    e.preventDefault(); const a = side(e);
+    d.classList.toggle('dr', a); d.classList.toggle('dl', !a);
+  };
+  d.ondragleave = () => d.classList.remove('dl', 'dr');
+  d.ondrop = e => {
+    if (!dragId || dragId === it.id) return;
+    e.preventDefault(); const a = side(e), id = dragId; dragId = null;
+    moveTo(id, it.id, a);
+  };
+}
+async function moveTo(id, targetId, after) {
+  const from = items.findIndex(i => i.id === id);
+  const [m] = items.splice(from, 1);
+  const t = items.findIndex(i => i.id === targetId);
+  items.splice(after ? t + 1 : t, 0, m);
+  await saveOrder(); render();
 }
 async function tapOrder(it) {
   if (!selectedId) { selectedId = it.id; return render(); }
   if (selectedId === it.id) { selectedId = null; return render(); }
-  const from = items.findIndex(i => i.id === selectedId);
-  const [moved] = items.splice(from, 1);
-  items.splice(items.indexOf(it) + (from < items.indexOf(it) ? 1 : 0), 0, moved);
+  const id = selectedId;
   selectedId = null;
-  await saveOrder(); render();
+  await moveTo(id, it.id, items.findIndex(i => i.id === id) < items.indexOf(it));
 }
 async function saveOrder() {
   const ch = [];
@@ -282,6 +382,7 @@ function showCurrent(dir = 0) {
   apply();
   $('count').textContent = `${items.indexOf(it) + 1} / ${items.length}`;
   $('noteTxt').value = it.note;
+  renderTagEditor(it);
   $('badge').classList.toggle('hidden', !it.done);
   const d = $('doneBtn');
   d.classList.toggle('is', it.done);
@@ -294,6 +395,30 @@ function go(step) {
   const n = current + step;
   if (n < 0 || n >= visible().length) return;
   current = n; showCurrent(step);
+}
+function renderTagEditor(it) {
+  const mine = it.tags || [];
+  const bar = $('tagbar');
+  bar.innerHTML = mine.map(t => `<span class="t">${esc(t)}<b data-x="${esc(t)}">✕</b></span>`).join('') +
+    '<input id="tagIn" list="tagOpts" placeholder="Etiqueta…" enterkeyhint="done" autocomplete="off" autocapitalize="none">';
+  bar.querySelectorAll('b').forEach(b => b.onclick = () => setTags(it, mine.filter(t => t !== b.dataset.x)));
+  const inp = $('tagIn');
+  const commit = () => { const v = inp.value.trim().toLowerCase().replace(/,/g, ''); inp.value = ''; if (v) addTag(it, v); };
+  inp.onkeydown = e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); } };
+  inp.oninput = e => { // elegir una opción del desplegable
+    if (e.inputType === 'insertReplacementText' || e.inputType === undefined) commit();
+  };
+  inp.onblur = commit;
+  $('sug').innerHTML = allTags().map(([t]) => t).filter(t => !mine.includes(t))
+    .map(t => `<button data-t="${esc(t)}">+ ${esc(t)}</button>`).join('');
+  $('sug').querySelectorAll('button').forEach(b => b.onclick = () => addTag(it, b.dataset.t));
+}
+function addTag(it, t) {
+  const mine = it.tags || [];
+  if (!mine.includes(t)) setTags(it, [...mine, t]);
+}
+function setTags(it, tags) {
+  it.tags = tags; markDirty(it); renderTagEditor(it);
 }
 async function saveNote() {
   const it = cur(); if (!it || current < 0) return;
@@ -354,7 +479,7 @@ const okr = async r => { if (!r.ok) throw new Error(await r.text()); return r; }
 const getDel = () => { try { return JSON.parse(localStorage.getItem('pendingDel') || '[]'); } catch (e) { return []; } };
 const setDel = a => { try { localStorage.setItem('pendingDel', JSON.stringify(a)); } catch (e) {} };
 const viewerOpen = () => !$('viewer').classList.contains('hidden');
-let syncing = false, syncAgain = false, pendingPull = false, syncTimer;
+let tagsWarned = false, syncing = false, syncAgain = false, pendingPull = false, syncTimer;
 
 function markDirty(it) {
   it.v = (it.v || 0) + 1; it.dirty = true;
@@ -392,10 +517,20 @@ async function sync(manual) {
       sent.push([it, v]);
     }
     if (sent.length) {
-      await okr(await sb('/rest/v1/items', { method: 'POST',
+      const post = withTags => sb('/rest/v1/items', { method: 'POST',
         headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify(sent.map(([i]) => ({ id: i.id, position: i.order, done: i.done, note: i.note }))) }));
-      for (const [it, v] of sent) if (it.v === v) it.dirty = false;
+        body: JSON.stringify(sent.map(([i]) => ({ id: i.id, position: i.order, done: i.done, note: i.note,
+          ...(withTags ? { tags: i.tags || [] } : {}) }))) });
+      let res = await post(true), tagsFailed = false;
+      if (!res.ok) {
+        const msg = await res.text();
+        if (!/tags/.test(msg)) throw new Error(msg);
+        tagsFailed = true; // falta la columna en Supabase: seguimos sin etiquetas
+        if (!tagsWarned) { tagsWarned = true; toast('Falta la columna de etiquetas en Supabase (ver supabase.sql)'); }
+        res = await post(false);
+      }
+      await okr(res);
+      for (const [it, v] of sent) if (it.v === v && !(tagsFailed && (it.tags || []).length)) it.dirty = false;
       await DB.put(sent.map(([i]) => i));
     }
     // 3. traer lo que haya en la nube
@@ -424,8 +559,10 @@ async function pull() {
       }
       continue;
     }
-    if (!it.dirty && (it.order !== r.position || it.done !== r.done || it.note !== (r.note || ''))) {
-      Object.assign(it, { order: r.position, done: r.done, note: r.note || '' }); changed.push(it);
+    const rt = r.tags === undefined ? (it.tags || []) : r.tags;
+    if (!it.dirty && (it.order !== r.position || it.done !== r.done || it.note !== (r.note || '') ||
+        JSON.stringify(it.tags || []) !== JSON.stringify(rt))) {
+      Object.assign(it, { order: r.position, done: r.done, note: r.note || '', tags: rt }); changed.push(it);
     }
   }
   const fresh = rows.filter(r => !byId(r.id));
@@ -434,7 +571,7 @@ async function pull() {
     toast(`Descargando ${++n}/${fresh.length}…`);
     try {
       const [full, thumb] = await Promise.all(['full', 'thumb'].map(async k => (await okr(await fetch(pubUrl(r.id, k)))).blob()));
-      const it = { id: r.id, order: r.position, done: r.done, note: r.note || '', full, thumb, dirty: false, uploaded: true, v: 0 };
+      const it = { id: r.id, order: r.position, done: r.done, note: r.note || '', tags: r.tags || [], full, thumb, dirty: false, uploaded: true, v: 0 };
       items.push(it); changed.push(it);
     } catch (e) { console.error(e); }
   }
@@ -465,6 +602,26 @@ document.querySelectorAll('#filters .chip').forEach(c => c.onclick = () => {
   setFilter(c.dataset.f);
 });
 $('closeBtn').onclick = closeViewer;
+{ // tamaño de miniaturas (escritorio)
+  const sz = $('size');
+  try { const v = localStorage.getItem('size'); if (v) sz.value = v; } catch (e) {}
+  const apply = () => $('grid').style.setProperty('--min', sz.value + 'px');
+  sz.oninput = () => { apply(); try { localStorage.setItem('size', sz.value); } catch (e) {} };
+  apply();
+}
+{ // arrastrar archivos desde el ordenador
+  const dz = $('dropzone'); let depth = 0;
+  const hasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  addEventListener('dragenter', e => { if (hasFiles(e)) { depth++; dz.classList.remove('hidden'); } });
+  addEventListener('dragleave', e => { if (hasFiles(e) && --depth <= 0) { depth = 0; dz.classList.add('hidden'); } });
+  addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+  addEventListener('drop', e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; dz.classList.add('hidden');
+    const f = [...e.dataTransfer.files].filter(x => x.type.startsWith('image/'));
+    if (f.length) addFiles(f);
+  });
+}
 if (SYNC) {
   $('syncBtn').classList.remove('hidden');
   $('syncBtn').onclick = () => sync(true);
@@ -477,7 +634,7 @@ $('doneBtn').onclick = toggleDone;
 $('delBtn').onclick = deleteCurrent;
 $('noteTxt').addEventListener('blur', saveNote);
 document.addEventListener('keydown', e => {
-  if ($('viewer').classList.contains('hidden') || e.target.tagName === 'TEXTAREA') return;
+  if ($('viewer').classList.contains('hidden') || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
   if (e.key === 'ArrowRight') go(1); if (e.key === 'ArrowLeft') go(-1); if (e.key === 'Escape') closeViewer();
 });
 
@@ -485,6 +642,7 @@ document.addEventListener('keydown', e => {
   try {
     await DB.open();
     items = (await DB.all()).sort((a, b) => a.order - b.order);
+    items.forEach(i => { i.tags = i.tags || []; });
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch (e) { toast('No se pudo abrir el almacenamiento'); }
   render();
