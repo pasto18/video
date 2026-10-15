@@ -28,9 +28,9 @@ h1 small{font-weight:400;color:var(--muted);font-size:14px;margin-left:6px}
 .chip.on{background:var(--text);color:var(--bg)}
 .chip.mode.on{background:var(--ok);color:#06210f}
 #grid{flex:1;overflow-y:auto;padding:0 12px calc(96px + env(safe-area-inset-bottom));
-  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-content:start}
-.tile{position:relative;aspect-ratio:1;border-radius:var(--r);overflow:hidden;background:var(--card)}
-.tile img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+  display:grid;grid-template-columns:repeat(3,1fr);grid-auto-rows:calc((100vw - 40px) / 3);gap:8px;align-content:start}
+.tile{position:relative;border-radius:var(--r);overflow:hidden;background:var(--card)}
+.tile img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
 .tile .n{position:absolute;left:6px;top:6px;min-width:22px;height:22px;padding:0 6px;border-radius:99px;
   background:rgba(0,0,0,.55);font-size:12px;display:grid;place-items:center;backdrop-filter:blur(6px)}
 .tile .note{position:absolute;right:6px;top:6px;width:8px;height:8px;border-radius:50%;background:#fbbf24}
@@ -42,9 +42,9 @@ h1 small{font-weight:400;color:var(--muted);font-size:14px;margin-left:6px}
 .empty b{display:block;color:var(--text);font-size:18px;margin-bottom:6px}
 .hint{grid-column:1/-1;text-align:center;font-size:13px;color:var(--muted);padding:2px 0 6px}
 
-.fab{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom));
+.fab{width:max-content;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom));
   display:flex;gap:8px}
-.pill{height:50px;padding:0 22px;border-radius:99px;background:var(--text);color:var(--bg);font-weight:600;
+.pill{white-space:nowrap;height:50px;padding:0 22px;border-radius:99px;background:var(--text);color:var(--bg);font-weight:600;
   box-shadow:0 6px 24px rgba(0,0,0,.5);display:flex;align-items:center;gap:8px}
 .pill.alt{background:var(--card);color:var(--text)}
 
@@ -95,7 +95,7 @@ textarea::placeholder{color:var(--muted)}
 @media (min-width:800px){
   header{padding:18px 24px 10px}
   .chips{padding:4px 24px 12px}
-  #grid{padding:0 24px 110px;grid-template-columns:repeat(auto-fill,minmax(var(--min,280px),1fr));gap:14px}
+  #grid{padding:0 24px 110px;grid-template-columns:repeat(auto-fill,minmax(var(--min,280px),1fr));gap:14px;grid-auto-rows:auto}
   .tile{aspect-ratio:16/9;cursor:grab}
   .tile img{object-fit:contain}
   .tile .tags{display:flex}
@@ -308,7 +308,7 @@ function render() {
     const d = document.createElement('div');
     d.className = 'tile' + (it.done ? ' done' : '') + (it.id === selectedId ? ' sel' : '') + (sel.has(it.id) ? ' picked' : '');
     d.dataset.id = it.id;
-    d.innerHTML = `<img src="${url(it, DESK ? 'full' : 'thumb')}" alt="" decoding="async" loading="lazy"><span class="n">${items.indexOf(it) + 1}</span>` +
+    d.innerHTML = `<img src="${url(it, DESK ? 'full' : 'thumb')}" alt=""${DESK ? ' loading="lazy"' : ''}><span class="n">${items.indexOf(it) + 1}</span>` +
       (it.note ? '<span class="note"></span>' : '') +
       ((it.tags || []).length ? `<div class="tags">${it.tags.map(t => `<span>${esc(t)}</span>`).join('')}</div>` : '');
     d.onclick = e => {
@@ -322,6 +322,11 @@ function render() {
       }
       if (sel.size) { sel.clear(); paintSel(); }
       openViewer(idx);
+    };
+    const im = d.querySelector('img'), k = DESK ? 'full' : 'thumb';
+    im.onerror = () => { // blob inválido o URL revocada: reintenta y, si no, usa la nube
+      if (!im.dataset.r) { im.dataset.r = 1; const u = urls.get(it.id); if (u) delete u[k]; im.src = url(it, k); }
+      else if (SYNC && !im.dataset.c) { im.dataset.c = 1; im.src = pubUrl(it.id, k === 'full' ? 'full' : 'thumb'); }
     };
     if (FINE) wireDrag(d, it);
     g.appendChild(d);
@@ -672,7 +677,7 @@ async function pull() {
   for (const r of fresh) {
     toast(`Descargando ${++n}/${fresh.length}…`);
     try {
-      const [full, thumb] = await Promise.all(['full', 'thumb'].map(async k => (await okr(await fetch(pubUrl(r.id, k)))).blob()));
+      const [full, thumb] = await Promise.all(['full', 'thumb'].map(async k => new Blob([await (await okr(await fetch(pubUrl(r.id, k)))).arrayBuffer()], { type: 'image/jpeg' })));
       const it = { id: r.id, order: r.position, done: r.done, note: r.note || '', tags: r.tags || [], full, thumb, dirty: false, uploaded: true, v: 0 };
       items.push(it); changed.push(it);
     } catch (e) { console.error(e); }
@@ -759,6 +764,11 @@ document.addEventListener('keydown', e => {
     await DB.open();
     items = (await DB.all()).sort((a, b) => a.order - b.order);
     items.forEach(i => { i.tags = i.tags || []; });
+    const fix = [];
+    items.forEach(i => ['full', 'thumb'].forEach(k => {
+      if (i[k] && i[k].type !== 'image/jpeg') { i[k] = new Blob([i[k]], { type: 'image/jpeg' }); if (!fix.includes(i)) fix.push(i); }
+    }));
+    if (fix.length) await DB.put(fix);
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch (e) { toast('No se pudo abrir el almacenamiento'); }
   render();
