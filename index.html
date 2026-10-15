@@ -108,6 +108,19 @@ textarea::placeholder{color:var(--muted)}
   .row{order:-1}
 }
 @media (pointer:fine){ #orderBtn{display:none} }
+#grid{position:relative}
+.tile.picked{outline:3px solid var(--ok);outline-offset:-3px}
+.tile.picked::before{content:"✓";position:absolute;right:8px;top:8px;width:24px;height:24px;border-radius:50%;background:var(--ok);
+  color:#06210f;display:grid;place-items:center;font-size:14px;font-weight:700;z-index:2}
+.marq{position:absolute;border:1px solid var(--ok);background:rgba(74,222,128,.12);border-radius:6px;pointer-events:none;z-index:5}
+.selbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom));display:flex;gap:10px;
+  align-items:center;background:var(--card);border:1px solid var(--line);padding:8px 8px 8px 20px;border-radius:99px;
+  box-shadow:0 6px 24px rgba(0,0,0,.5);z-index:15;white-space:nowrap}
+.selbar input{width:160px;border:0;outline:0;background:var(--bg);color:var(--text);font:inherit;font-size:15px;padding:0 14px;border-radius:99px;height:36px}
+.selbar input::placeholder{color:var(--muted)}
+.selbar button{height:36px;padding:0 14px;border-radius:99px}
+.selbar .danger{color:#f87171;background:rgba(248,113,113,.1)}
+.selbar .x{width:36px;padding:0;background:var(--bg);color:var(--muted)}
 #syncBtn.spin{animation:spin 1s linear infinite;color:var(--text)}
 @keyframes spin{to{transform:rotate(360deg)}}
 #toast{position:fixed;left:50%;top:calc(60px + env(safe-area-inset-top));transform:translateX(-50%);background:#2a2a2e;padding:10px 16px;
@@ -133,6 +146,12 @@ textarea::placeholder{color:var(--muted)}
   </div>
   <div class="chips hidden" id="tagChips"></div>
   <div id="grid"></div>
+  <div class="selbar hidden" id="selbar">
+    <span id="selCount"></span>
+    <input id="selTag" list="tagOpts" placeholder="Etiquetar…" autocomplete="off" autocapitalize="none">
+    <button class="danger" id="selDel">Eliminar</button>
+    <button class="x" id="selClear" aria-label="Deseleccionar">✕</button>
+  </div>
   <div class="fab" id="fab">
     <button class="pill" id="addBtn">＋ Añadir fotos</button>
     <button class="pill alt hidden" id="startBtn">▶ Empezar</button>
@@ -193,6 +212,8 @@ let items = [];          // sorted by order
 let filter = 'all';
 let ordering = false;
 let tagFilter = new Set();
+let sel = new Set();     // selección múltiple (escritorio)
+let anchor = null;
 let selectedId = null;   // item picked while ordering
 let current = -1;        // index in visible list while in viewer
 const urls = new Map();  // id -> {thumb, full}
@@ -285,15 +306,35 @@ function render() {
   }
   vis.forEach((it, idx) => {
     const d = document.createElement('div');
-    d.className = 'tile' + (it.done ? ' done' : '') + (it.id === selectedId ? ' sel' : '');
+    d.className = 'tile' + (it.done ? ' done' : '') + (it.id === selectedId ? ' sel' : '') + (sel.has(it.id) ? ' picked' : '');
+    d.dataset.id = it.id;
     d.innerHTML = `<img src="${url(it, DESK ? 'full' : 'thumb')}" alt="" decoding="async" loading="lazy"><span class="n">${items.indexOf(it) + 1}</span>` +
       (it.note ? '<span class="note"></span>' : '') +
       ((it.tags || []).length ? `<div class="tags">${it.tags.map(t => `<span>${esc(t)}</span>`).join('')}</div>` : '');
-    d.onclick = () => ordering ? tapOrder(it) : openViewer(idx);
+    d.onclick = e => {
+      if (ordering) return tapOrder(it);
+      if (FINE && (e.metaKey || e.ctrlKey)) { sel.has(it.id) ? sel.delete(it.id) : sel.add(it.id); anchor = it.id; return paintSel(); }
+      if (FINE && e.shiftKey) {
+        const ids = visible().map(x => x.id), a = ids.indexOf(anchor), b = ids.indexOf(it.id);
+        if (a < 0) { sel.add(it.id); anchor = it.id; }
+        else ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(id => sel.add(id));
+        return paintSel();
+      }
+      if (sel.size) { sel.clear(); paintSel(); }
+      openViewer(idx);
+    };
     if (FINE) wireDrag(d, it);
     g.appendChild(d);
   });
   renderTagChips();
+  paintSel();
+}
+function paintSel() {
+  [...sel].forEach(id => { if (!byId(id)) sel.delete(id); });
+  document.querySelectorAll('#grid .tile').forEach(t => t.classList.toggle('picked', sel.has(t.dataset.id)));
+  const n = sel.size;
+  $('selbar').classList.toggle('hidden', !n); $('fab').classList.toggle('hidden', !!n);
+  $('selCount').textContent = n + (n === 1 ? ' seleccionada' : ' seleccionadas');
 }
 const DESK = matchMedia('(min-width:800px)').matches;
 function renderTagChips() {
@@ -310,41 +351,86 @@ function renderTagChips() {
   $('tagOpts').innerHTML = tags.map(([t]) => `<option value="${esc(t)}">`).join('');
 }
 
-/* drag & drop (ratón) */
-let dragId = null;
+/* drag & drop (ratón): arrastra una foto o toda la selección */
+let dragIds = null;
 function wireDrag(d, it) {
   d.draggable = true;
   const side = e => { const r = d.getBoundingClientRect(); return e.clientX > r.left + r.width / 2; };
   d.ondragstart = e => {
-    dragId = it.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', it.id);
-    requestAnimationFrame(() => d.classList.add('dragging'));
+    dragIds = sel.has(it.id) ? [...sel] : [it.id];
+    e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', it.id);
+    if (dragIds.length > 1) {
+      const g = document.createElement('div'); g.textContent = dragIds.length + ' fotos';
+      g.style.cssText = 'position:fixed;top:-100px;padding:8px 14px;border-radius:99px;background:#f2f2f3;color:#0e0e10;font:600 14px system-ui';
+      document.body.appendChild(g); e.dataTransfer.setDragImage(g, 20, 16); setTimeout(() => g.remove());
+    }
+    requestAnimationFrame(() => document.querySelectorAll('#grid .tile').forEach(t => t.classList.toggle('dragging', dragIds.includes(t.dataset.id))));
   };
-  d.ondragend = () => { dragId = null; document.querySelectorAll('.tile').forEach(t => t.classList.remove('dragging', 'dl', 'dr')); };
+  d.ondragend = () => { dragIds = null; document.querySelectorAll('.tile').forEach(t => t.classList.remove('dragging', 'dl', 'dr')); };
   d.ondragover = e => {
-    if (!dragId || dragId === it.id) return;
+    if (!dragIds || dragIds.includes(it.id)) return;
     e.preventDefault(); const a = side(e);
     d.classList.toggle('dr', a); d.classList.toggle('dl', !a);
   };
   d.ondragleave = () => d.classList.remove('dl', 'dr');
   d.ondrop = e => {
-    if (!dragId || dragId === it.id) return;
-    e.preventDefault(); const a = side(e), id = dragId; dragId = null;
-    moveTo(id, it.id, a);
+    if (!dragIds || dragIds.includes(it.id)) return;
+    e.preventDefault(); const a = side(e), ids = dragIds; dragIds = null;
+    moveTo(ids, it.id, a);
   };
 }
-async function moveTo(id, targetId, after) {
-  const from = items.findIndex(i => i.id === id);
-  const [m] = items.splice(from, 1);
+async function moveTo(ids, targetId, after) {
+  const set = new Set(ids);
+  if (set.has(targetId)) return;
+  const moving = items.filter(i => set.has(i.id));
+  items = items.filter(i => !set.has(i.id));
   const t = items.findIndex(i => i.id === targetId);
-  items.splice(after ? t + 1 : t, 0, m);
+  items.splice(after ? t + 1 : t, 0, ...moving);
   await saveOrder(); render();
 }
+
+/* marco de selección con el ratón */
+$('grid').addEventListener('mousedown', e => {
+  const g = $('grid');
+  if (!FINE || e.button !== 0 || e.target !== g) return;
+  e.preventDefault();
+  const add = e.shiftKey || e.metaKey || e.ctrlKey, base = new Set(add ? sel : []);
+  const gr = g.getBoundingClientRect();
+  const x0 = e.clientX - gr.left + g.scrollLeft, y0 = e.clientY - gr.top + g.scrollTop;
+  if (!add && sel.size) { sel.clear(); paintSel(); }
+  let box = null, lastX = e.clientX, lastY = e.clientY, raf;
+  const update = () => {
+    const r = g.getBoundingClientRect();
+    const x1 = lastX - r.left + g.scrollLeft, y1 = lastY - r.top + g.scrollTop;
+    if (!box && Math.hypot(x1 - x0, y1 - y0) < 5) return;
+    if (!box) { box = document.createElement('div'); box.className = 'marq'; g.appendChild(box); }
+    const L = Math.min(x0, x1), T = Math.min(y0, y1), R = Math.max(x0, x1), B = Math.max(y0, y1);
+    Object.assign(box.style, { left: L + 'px', top: T + 'px', width: R - L + 'px', height: B - T + 'px' });
+    sel = new Set(base);
+    g.querySelectorAll('.tile').forEach(t => {
+      if (t.offsetLeft < R && t.offsetLeft + t.offsetWidth > L && t.offsetTop < B && t.offsetTop + t.offsetHeight > T) sel.add(t.dataset.id);
+    });
+    paintSel();
+  };
+  const tick = () => { // desplazamiento automático cerca de los bordes
+    const r = g.getBoundingClientRect();
+    if (lastY > r.bottom - 50) g.scrollTop += 16; else if (lastY < r.top + 50) g.scrollTop -= 16;
+    update(); raf = requestAnimationFrame(tick);
+  };
+  const move = ev => { lastX = ev.clientX; lastY = ev.clientY; };
+  const up = () => {
+    cancelAnimationFrame(raf); removeEventListener('mousemove', move); removeEventListener('mouseup', up);
+    if (box) box.remove();
+  };
+  addEventListener('mousemove', move); addEventListener('mouseup', up);
+  raf = requestAnimationFrame(tick);
+});
 async function tapOrder(it) {
   if (!selectedId) { selectedId = it.id; return render(); }
   if (selectedId === it.id) { selectedId = null; return render(); }
   const id = selectedId;
   selectedId = null;
-  await moveTo(id, it.id, items.findIndex(i => i.id === id) < items.indexOf(it));
+  await moveTo([id], it.id, items.findIndex(i => i.id === id) < items.indexOf(it));
 }
 async function saveOrder() {
   const ch = [];
@@ -440,13 +526,29 @@ async function toggleDone() {
   }
   showCurrent();
 }
+async function deleteItems(list) {
+  for (const it of list) {
+    await DB.del(it.id);
+    if (it.uploaded) setDel([...getDel(), it.id]);
+    items.splice(items.indexOf(it), 1); sel.delete(it.id);
+    const u = urls.get(it.id); if (u) Object.values(u).forEach(URL.revokeObjectURL); urls.delete(it.id);
+  }
+  scheduleSync(300);
+  await saveOrder();
+}
+async function deleteSelected() {
+  const list = items.filter(i => sel.has(i.id));
+  if (!list.length || !confirm(`¿Borrar ${list.length} ${list.length === 1 ? 'imagen' : 'imágenes'}?`)) return;
+  await deleteItems(list); render();
+}
+function tagSelected(raw) {
+  const t = raw.trim().toLowerCase().replace(/,/g, ''); if (!t) return;
+  items.filter(i => sel.has(i.id) && !(i.tags || []).includes(t)).forEach(i => { i.tags = [...(i.tags || []), t]; markDirty(i); });
+  render();
+}
 async function deleteCurrent() {
   const it = cur(); if (!it || !confirm('¿Borrar esta imagen?')) return;
-  await DB.del(it.id);
-  if (it.uploaded) { setDel([...getDel(), it.id]); scheduleSync(300); }
-  items.splice(items.indexOf(it), 1);
-  const u = urls.get(it.id); if (u) Object.values(u).forEach(URL.revokeObjectURL); urls.delete(it.id);
-  await saveOrder();
+  await deleteItems([it]);
   const vis = visible();
   if (!vis.length) return closeViewer();
   current = Math.min(current, vis.length - 1); showCurrent();
@@ -602,6 +704,20 @@ document.querySelectorAll('#filters .chip').forEach(c => c.onclick = () => {
   setFilter(c.dataset.f);
 });
 $('closeBtn').onclick = closeViewer;
+$('selDel').onclick = deleteSelected;
+$('selClear').onclick = () => { sel.clear(); paintSel(); };
+{
+  const inp = $('selTag');
+  const go = () => { tagSelected(inp.value); inp.value = ''; };
+  inp.onkeydown = e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); go(); } };
+  inp.oninput = e => { if (e.inputType === 'insertReplacementText' || e.inputType === undefined) go(); };
+}
+document.addEventListener('keydown', e => {
+  if (!$('viewer').classList.contains('hidden') || ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if (e.key === 'Escape') { sel.clear(); paintSel(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && sel.size) { e.preventDefault(); deleteSelected(); }
+  else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a' && FINE) { e.preventDefault(); visible().forEach(i => sel.add(i.id)); paintSel(); }
+});
 { // tamaño de miniaturas (escritorio)
   const sz = $('size');
   try { const v = localStorage.getItem('size'); if (v) sz.value = v; } catch (e) {}
