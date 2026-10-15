@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0e0e10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Tomas</title>
+<style>
+:root{
+  --bg:#0e0e10; --card:#1a1a1d; --line:#2a2a2e; --text:#f2f2f3; --muted:#8c8c93;
+  --accent:#f2f2f3; --ok:#4ade80; --r:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+  font:16px/1.4 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;overscroll-behavior:none}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.hidden{display:none!important}
+
+/* ---------- grid screen ---------- */
+#home{height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px}
+h1{font-size:22px;font-weight:600;margin:0;letter-spacing:-.3px}
+h1 small{font-weight:400;color:var(--muted);font-size:14px;margin-left:6px}
+.chips{display:flex;gap:8px;padding:4px 16px 12px;overflow-x:auto;scrollbar-width:none}
+.chip{padding:7px 14px;border-radius:99px;background:var(--card);color:var(--muted);font-size:14px;white-space:nowrap}
+.chip.on{background:var(--text);color:var(--bg)}
+.chip.mode.on{background:var(--ok);color:#06210f}
+#grid{flex:1;overflow-y:auto;padding:0 12px calc(96px + env(safe-area-inset-bottom));
+  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-content:start}
+.tile{position:relative;aspect-ratio:1;border-radius:var(--r);overflow:hidden;background:var(--card)}
+.tile img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+.tile .n{position:absolute;left:6px;top:6px;min-width:22px;height:22px;padding:0 6px;border-radius:99px;
+  background:rgba(0,0,0,.55);font-size:12px;display:grid;place-items:center;backdrop-filter:blur(6px)}
+.tile .note{position:absolute;right:6px;top:6px;width:8px;height:8px;border-radius:50%;background:#fbbf24}
+.tile.done img{opacity:.35}
+.tile.done::after{content:"✓";position:absolute;inset:0;display:grid;place-items:center;font-size:30px;color:var(--ok)}
+.tile.sel{outline:3px solid var(--text);outline-offset:-3px}
+.tile.target{opacity:.9}
+.empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:70px 20px}
+.empty b{display:block;color:var(--text);font-size:18px;margin-bottom:6px}
+.hint{grid-column:1/-1;text-align:center;font-size:13px;color:var(--muted);padding:2px 0 6px}
+
+.fab{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom));
+  display:flex;gap:8px}
+.pill{height:50px;padding:0 22px;border-radius:99px;background:var(--text);color:var(--bg);font-weight:600;
+  box-shadow:0 6px 24px rgba(0,0,0,.5);display:flex;align-items:center;gap:8px}
+.pill.alt{background:var(--card);color:var(--text)}
+
+/* ---------- viewer ---------- */
+#viewer{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top);z-index:10}
+.bar{display:flex;align-items:center;justify-content:space-between;padding:8px 8px}
+.ib{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;font-size:22px;color:var(--muted)}
+.count{color:var(--muted);font-size:15px}
+#stage{flex:1;min-height:0;position:relative;overflow:hidden;touch-action:pan-y;padding:0 12px;
+  display:flex;align-items:center;justify-content:center}
+#stage img{max-width:100%;max-height:100%;object-fit:contain;border-radius:var(--r);transition:transform .22s ease,opacity .22s ease;user-select:none;-webkit-user-drag:none}
+#stage.dragging img{transition:none}
+#stage .badge{position:absolute;right:22px;top:10px;background:var(--ok);color:#06210f;font-size:13px;font-weight:600;
+  padding:4px 10px;border-radius:99px}
+.panel{padding:10px 12px calc(12px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
+textarea{width:100%;resize:none;border:0;outline:0;border-radius:var(--r);background:var(--card);
+  color:var(--text);font:inherit;font-size:16px;padding:12px 14px;height:64px}
+textarea::placeholder{color:var(--muted)}
+.row{display:flex;gap:8px;align-items:center}
+.done-btn{flex:1;height:52px;border-radius:99px;background:var(--text);color:var(--bg);font-weight:600;font-size:17px}
+.done-btn.is{background:var(--card);color:var(--ok)}
+.nav{width:52px;height:52px;border-radius:50%;background:var(--card);font-size:20px;display:grid;place-items:center}
+.nav:disabled{opacity:.3}
+#toast{position:fixed;left:50%;top:calc(60px + env(safe-area-inset-top));transform:translateX(-50%);background:#2a2a2e;padding:10px 16px;
+  border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:30}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div id="home">
+  <header>
+    <h1>Tomas <small id="progress"></small></h1>
+    <button class="chip mode" id="orderBtn">Ordenar</button>
+  </header>
+  <div class="chips" id="filters">
+    <button class="chip on" data-f="all">Todas</button>
+    <button class="chip" data-f="todo">Pendientes</button>
+    <button class="chip" data-f="done">Hechas</button>
+  </div>
+  <div id="grid"></div>
+  <div class="fab" id="fab">
+    <button class="pill" id="addBtn">＋ Añadir fotos</button>
+    <button class="pill alt hidden" id="startBtn">▶ Empezar</button>
+  </div>
+</div>
+
+<div id="viewer" class="hidden">
+  <div class="bar">
+    <button class="ib" id="closeBtn" aria-label="Cerrar">✕</button>
+    <span class="count" id="count"></span>
+    <button class="ib" id="delBtn" aria-label="Borrar">🗑</button>
+  </div>
+  <div id="stage"><img id="bigImg" alt=""><span class="badge hidden" id="badge">Hecha</span></div>
+  <div class="panel">
+    <textarea id="noteTxt" placeholder="Anotación…"></textarea>
+    <div class="row">
+      <button class="nav" id="prevBtn" aria-label="Anterior">‹</button>
+      <button class="done-btn" id="doneBtn">Marcar como hecha</button>
+      <button class="nav" id="nextBtn" aria-label="Siguiente">›</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="file" accept="image/*" multiple hidden>
+<div id="toast"></div>
+
+<script>
+/* ---------- storage (IndexedDB) ---------- */
+const DB = (() => {
+  let db;
+  const open = () => new Promise((res, rej) => {
+    const r = indexedDB.open('tomas', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('items', { keyPath: 'id' });
+    r.onsuccess = () => { db = r.result; res(); };
+    r.onerror = () => rej(r.error);
+  });
+  const tx = (mode, fn) => new Promise((res, rej) => {
+    const t = db.transaction('items', mode);
+    const out = fn(t.objectStore('items'));
+    t.oncomplete = () => res(out && out.result);
+    t.onerror = () => rej(t.error);
+  });
+  return {
+    open,
+    all: () => tx('readonly', s => s.getAll()),
+    put: items => tx('readwrite', s => { [].concat(items).forEach(i => s.put(i)); }),
+    del: id => tx('readwrite', s => { s.delete(id); }),
+  };
+})();
+
+/* ---------- state ---------- */
+let items = [];          // sorted by order
+let filter = 'all';
+let ordering = false;
+let selectedId = null;   // item picked while ordering
+let current = -1;        // index in visible list while in viewer
+const urls = new Map();  // id -> {thumb, full}
+
+const $ = id => document.getElementById(id);
+const byId = id => items.find(i => i.id === id);
+const visible = () => items.filter(i => filter === 'all' || (filter === 'done') === i.done);
+const url = (i, k) => {
+  let u = urls.get(i.id) || {};
+  if (!u[k]) u[k] = URL.createObjectURL(i[k]);
+  urls.set(i.id, u);
+  return u[k];
+};
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+/* ---------- image import ---------- */
+async function load(file) {
+  if (window.createImageBitmap) {
+    try { return await createImageBitmap(file); } catch (e) {}
+  }
+  return new Promise((res, rej) => {
+    const img = new Image(), u = URL.createObjectURL(file);
+    img.onload = () => { res(img); };
+    img.onerror = rej; img.src = u;
+  });
+}
+function scaled(src, max, q) {
+  const w = src.width, h = src.height, k = Math.min(1, max / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', q));
+}
+async function addFiles(files) {
+  const list = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  let n = 0, base = items.length ? Math.max(...items.map(i => i.order)) + 1 : 0;
+  const added = [];
+  for (const f of list) {
+    toast(`Importando ${++n}/${list.length}…`);
+    try {
+      const src = await load(f);
+      const item = {
+        id: crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + n,
+        order: base++, done: false, note: '',
+        full: await scaled(src, 2400, 0.9),
+        thumb: await scaled(src, 420, 0.8),
+      };
+      added.push(item);
+    } catch (e) { toast('No pude leer ' + f.name); }
+  }
+  if (added.length) { await DB.put(added); items.push(...added); }
+  render();
+  toast(`${added.length} añadidas`);
+}
+
+/* ---------- grid ---------- */
+function render() {
+  const g = $('grid'), vis = visible();
+  g.innerHTML = '';
+  const done = items.filter(i => i.done).length;
+  $('progress').textContent = items.length ? `${done}/${items.length}` : '';
+  $('startBtn').classList.toggle('hidden', !items.length || ordering);
+  $('orderBtn').classList.toggle('on', ordering);
+  $('orderBtn').textContent = ordering ? 'Listo' : 'Ordenar';
+  $('orderBtn').classList.toggle('hidden', items.length < 2);
+  if (!items.length) {
+    g.innerHTML = '<div class="empty"><b>Sin referencias todavía</b>Añade tus stills para empezar.</div>';
+    return;
+  }
+  if (ordering) {
+    const h = document.createElement('div'); h.className = 'hint';
+    h.textContent = selectedId ? 'Toca dónde quieres ponerla' : 'Toca una foto para moverla';
+    g.appendChild(h);
+  }
+  if (!vis.length) {
+    g.insertAdjacentHTML('beforeend', '<div class="empty">Nada aquí.</div>');
+  }
+  vis.forEach((it, idx) => {
+    const d = document.createElement('div');
+    d.className = 'tile' + (it.done ? ' done' : '') + (it.id === selectedId ? ' sel' : '');
+    d.innerHTML = `<img src="${url(it, 'thumb')}" alt=""><span class="n">${items.indexOf(it) + 1}</span>` +
+      (it.note ? '<span class="note"></span>' : '');
+    d.onclick = () => ordering ? tapOrder(it) : openViewer(idx);
+    g.appendChild(d);
+  });
+}
+async function tapOrder(it) {
+  if (!selectedId) { selectedId = it.id; return render(); }
+  if (selectedId === it.id) { selectedId = null; return render(); }
+  const from = items.findIndex(i => i.id === selectedId);
+  const [moved] = items.splice(from, 1);
+  items.splice(items.indexOf(it) + (from < items.indexOf(it) ? 1 : 0), 0, moved);
+  selectedId = null;
+  await saveOrder(); render();
+}
+async function saveOrder() {
+  items.forEach((i, k) => i.order = k);
+  await DB.put(items);
+}
+
+/* ---------- viewer ---------- */
+function openViewer(idx) {
+  current = idx;
+  $('viewer').classList.remove('hidden');
+  showCurrent();
+}
+function closeViewer() {
+  saveNote();
+  $('viewer').classList.add('hidden');
+  current = -1; render();
+}
+function cur() { return visible()[current]; }
+function showCurrent(dir = 0) {
+  const vis = visible(), it = vis[current];
+  if (!it) return closeViewer();
+  const img = $('bigImg');
+  const apply = () => {
+    img.src = url(it, 'full');
+    img.style.transition = 'none';
+    img.style.transform = dir ? `translateX(${dir * 40}%)` : '';
+    img.style.opacity = dir ? 0 : 1;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      img.style.transition = ''; img.style.transform = ''; img.style.opacity = 1;
+    }));
+  };
+  apply();
+  $('count').textContent = `${items.indexOf(it) + 1} / ${items.length}`;
+  $('noteTxt').value = it.note;
+  $('badge').classList.toggle('hidden', !it.done);
+  const d = $('doneBtn');
+  d.classList.toggle('is', it.done);
+  d.textContent = it.done ? '✓ Hecha · deshacer' : 'Marcar como hecha';
+  $('prevBtn').disabled = current === 0;
+  $('nextBtn').disabled = current >= vis.length - 1;
+}
+function go(step) {
+  saveNote();
+  const n = current + step;
+  if (n < 0 || n >= visible().length) return;
+  current = n; showCurrent(step);
+}
+async function saveNote() {
+  const it = cur(); if (!it || current < 0) return;
+  const v = $('noteTxt').value.trim();
+  if (v !== it.note) { it.note = v; await DB.put(it); }
+}
+async function toggleDone() {
+  const it = cur(); await saveNote();
+  it.done = !it.done; await DB.put(it);
+  if (it.done) {
+    // advance to the next pending shot (in the visible list, then wrap)
+    const vis = visible();
+    if (filter === 'todo') { // item leaves the list
+      if (!vis.length) return closeViewer();
+      current = Math.min(current, vis.length - 1); return showCurrent(1);
+    }
+    const next = vis.findIndex((x, k) => k > current && !x.done);
+    if (next >= 0) { current = next; return showCurrent(1); }
+  }
+  showCurrent();
+}
+async function deleteCurrent() {
+  const it = cur(); if (!it || !confirm('¿Borrar esta imagen?')) return;
+  await DB.del(it.id);
+  items.splice(items.indexOf(it), 1);
+  const u = urls.get(it.id); if (u) Object.values(u).forEach(URL.revokeObjectURL); urls.delete(it.id);
+  await saveOrder();
+  const vis = visible();
+  if (!vis.length) return closeViewer();
+  current = Math.min(current, vis.length - 1); showCurrent();
+}
+
+/* swipe */
+(() => {
+  const st = $('stage'); let x0 = null, y0 = 0, dx = 0;
+  st.addEventListener('touchstart', e => {
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; st.classList.add('dragging');
+  }, { passive: true });
+  st.addEventListener('touchmove', e => {
+    if (x0 === null) return;
+    dx = e.touches[0].clientX - x0;
+    if (Math.abs(dx) > Math.abs(e.touches[0].clientY - y0)) $('bigImg').style.transform = `translateX(${dx}px)`;
+  }, { passive: true });
+  st.addEventListener('touchend', () => {
+    st.classList.remove('dragging'); $('bigImg').style.transform = '';
+    if (x0 !== null && Math.abs(dx) > 60) go(dx < 0 ? 1 : -1);
+    x0 = null;
+  });
+})();
+
+/* ---------- wiring ---------- */
+$('addBtn').onclick = () => $('file').click();
+$('file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+$('startBtn').onclick = () => {
+  const vis = visible(); if (!vis.length) return;
+  const first = vis.findIndex(i => !i.done);
+  openViewer(first >= 0 ? first : 0);
+};
+$('orderBtn').onclick = () => {
+  ordering = !ordering; selectedId = null;
+  if (ordering && filter !== 'all') setFilter('all'); else render();
+};
+function setFilter(f) {
+  filter = f;
+  document.querySelectorAll('#filters .chip').forEach(c => c.classList.toggle('on', c.dataset.f === f));
+  render();
+}
+document.querySelectorAll('#filters .chip').forEach(c => c.onclick = () => {
+  if (ordering && c.dataset.f !== 'all') return toast('Termina de ordenar primero');
+  setFilter(c.dataset.f);
+});
+$('closeBtn').onclick = closeViewer;
+$('prevBtn').onclick = () => go(-1);
+$('nextBtn').onclick = () => go(1);
+$('doneBtn').onclick = toggleDone;
+$('delBtn').onclick = deleteCurrent;
+$('noteTxt').addEventListener('blur', saveNote);
+document.addEventListener('keydown', e => {
+  if ($('viewer').classList.contains('hidden') || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight') go(1); if (e.key === 'ArrowLeft') go(-1); if (e.key === 'Escape') closeViewer();
+});
+
+(async () => {
+  try {
+    await DB.open();
+    items = (await DB.all()).sort((a, b) => a.order - b.order);
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  } catch (e) { toast('No se pudo abrir el almacenamiento'); }
+  render();
+})();
+</script>
+</body>
+</html>
