@@ -69,6 +69,8 @@ textarea::placeholder{color:var(--muted)}
 .done-btn.is{background:var(--card);color:var(--ok)}
 .nav{width:52px;height:52px;border-radius:50%;background:var(--card);font-size:20px;display:grid;place-items:center}
 .nav:disabled{opacity:.3}
+#syncBtn.spin{animation:spin 1s linear infinite;color:var(--text)}
+@keyframes spin{to{transform:rotate(360deg)}}
 #toast{position:fixed;left:50%;top:calc(60px + env(safe-area-inset-top));transform:translateX(-50%);background:#2a2a2e;padding:10px 16px;
   border-radius:99px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:30}
 #toast.show{opacity:1}
@@ -79,7 +81,10 @@ textarea::placeholder{color:var(--muted)}
 <div id="home">
   <header>
     <h1>Tomas <small id="progress"></small></h1>
-    <button class="chip mode" id="orderBtn">Ordenar</button>
+    <div style="display:flex;gap:8px">
+      <button class="chip hidden" id="syncBtn" aria-label="Sincronizar">↻</button>
+      <button class="chip mode" id="orderBtn">Ordenar</button>
+    </div>
   </header>
   <div class="chips" id="filters">
     <button class="chip on" data-f="all">Todas</button>
@@ -113,6 +118,7 @@ textarea::placeholder{color:var(--muted)}
 <input type="file" id="file" accept="image/*" multiple hidden>
 <div id="toast"></div>
 
+<script src="config.js"></script>
 <script>
 /* ---------- storage (IndexedDB) ---------- */
 const DB = (() => {
@@ -187,7 +193,7 @@ async function addFiles(files) {
       const src = await load(f);
       const item = {
         id: crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + n,
-        order: base++, done: false, note: '',
+        order: base++, done: false, note: '', dirty: true, uploaded: false, v: 0,
         full: await scaled(src, 2400, 0.9),
         thumb: await scaled(src, 420, 0.8),
       };
@@ -197,6 +203,7 @@ async function addFiles(files) {
   if (added.length) { await DB.put(added); items.push(...added); }
   render();
   toast(`${added.length} añadidas`);
+  scheduleSync(300);
 }
 
 /* ---------- grid ---------- */
@@ -240,8 +247,10 @@ async function tapOrder(it) {
   await saveOrder(); render();
 }
 async function saveOrder() {
-  items.forEach((i, k) => i.order = k);
-  await DB.put(items);
+  const ch = [];
+  items.forEach((i, k) => { if (i.order !== k) { i.order = k; i.v = (i.v || 0) + 1; i.dirty = true; ch.push(i); } });
+  if (ch.length) await DB.put(ch);
+  scheduleSync();
 }
 
 /* ---------- viewer ---------- */
@@ -254,6 +263,7 @@ function closeViewer() {
   saveNote();
   $('viewer').classList.add('hidden');
   current = -1; render();
+  if (pendingPull) scheduleSync(200);
 }
 function cur() { return visible()[current]; }
 function showCurrent(dir = 0) {
@@ -288,11 +298,11 @@ function go(step) {
 async function saveNote() {
   const it = cur(); if (!it || current < 0) return;
   const v = $('noteTxt').value.trim();
-  if (v !== it.note) { it.note = v; await DB.put(it); }
+  if (v !== it.note) { it.note = v; markDirty(it); }
 }
 async function toggleDone() {
   const it = cur(); await saveNote();
-  it.done = !it.done; await DB.put(it);
+  it.done = !it.done; markDirty(it);
   if (it.done) {
     // advance to the next pending shot (in the visible list, then wrap)
     const vis = visible();
@@ -308,6 +318,7 @@ async function toggleDone() {
 async function deleteCurrent() {
   const it = cur(); if (!it || !confirm('¿Borrar esta imagen?')) return;
   await DB.del(it.id);
+  if (it.uploaded) { setDel([...getDel(), it.id]); scheduleSync(300); }
   items.splice(items.indexOf(it), 1);
   const u = urls.get(it.id); if (u) Object.values(u).forEach(URL.revokeObjectURL); urls.delete(it.id);
   await saveOrder();
@@ -334,6 +345,104 @@ async function deleteCurrent() {
   });
 })();
 
+/* ---------- sync (Supabase, opcional: ver config.js) ---------- */
+const CFG = window.SUPABASE || {};
+const SYNC = !!(CFG.url && CFG.key);
+const sb = (path, opt = {}) => fetch(CFG.url + path, { ...opt, headers: { apikey: CFG.key, ...(opt.headers || {}) } });
+const pubUrl = (id, k) => `${CFG.url}/storage/v1/object/public/stills/${id}/${k}.jpg`;
+const okr = async r => { if (!r.ok) throw new Error(await r.text()); return r; };
+const getDel = () => { try { return JSON.parse(localStorage.getItem('pendingDel') || '[]'); } catch (e) { return []; } };
+const setDel = a => { try { localStorage.setItem('pendingDel', JSON.stringify(a)); } catch (e) {} };
+const viewerOpen = () => !$('viewer').classList.contains('hidden');
+let syncing = false, syncAgain = false, pendingPull = false, syncTimer;
+
+function markDirty(it) {
+  it.v = (it.v || 0) + 1; it.dirty = true;
+  DB.put(it); scheduleSync();
+}
+function scheduleSync(ms = 1500) {
+  if (!SYNC) return;
+  clearTimeout(syncTimer); syncTimer = setTimeout(sync, ms);
+}
+async function sync(manual) {
+  if (!SYNC) return;
+  if (syncing) { syncAgain = true; return; }
+  syncing = true; $('syncBtn').classList.add('spin');
+  try {
+    // 1. borrados pendientes
+    for (const id of getDel()) {
+      await okr(await sb('/storage/v1/object/stills', { method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefixes: [`${id}/full.jpg`, `${id}/thumb.jpg`] }) }));
+      await okr(await sb(`/rest/v1/items?id=eq.${id}`, { method: 'DELETE' }));
+      setDel(getDel().filter(x => x !== id));
+    }
+    // 2. subir lo nuevo o cambiado
+    const sent = [];
+    for (const it of items.filter(i => i.dirty || !i.uploaded)) {
+      const v = it.v;
+      if (!it.uploaded) {
+        toast('Subiendo…');
+        for (const k of ['full', 'thumb']) {
+          await okr(await sb(`/storage/v1/object/stills/${it.id}/${k}.jpg`, { method: 'POST',
+            headers: { 'Content-Type': 'image/jpeg', 'x-upsert': 'true' }, body: it[k] }));
+        }
+        it.uploaded = true;
+      }
+      sent.push([it, v]);
+    }
+    if (sent.length) {
+      await okr(await sb('/rest/v1/items', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify(sent.map(([i]) => ({ id: i.id, position: i.order, done: i.done, note: i.note }))) }));
+      for (const [it, v] of sent) if (it.v === v) it.dirty = false;
+      await DB.put(sent.map(([i]) => i));
+    }
+    // 3. traer lo que haya en la nube
+    if (viewerOpen()) pendingPull = true;
+    else { pendingPull = false; await pull(); }
+    if (manual === true) toast('Sincronizado');
+  } catch (e) {
+    console.error(e);
+    toast(navigator.onLine ? 'Error al sincronizar' : 'Sin conexión');
+  } finally {
+    syncing = false; $('syncBtn').classList.remove('spin');
+    if (syncAgain) { syncAgain = false; scheduleSync(300); }
+  }
+}
+async function pull() {
+  const rows = await (await okr(await sb('/rest/v1/items?select=*&order=position'))).json();
+  const remote = new Map(rows.map(r => [r.id, r]));
+  const changed = [];
+  for (const it of [...items]) {
+    const r = remote.get(it.id);
+    if (!r) {
+      if (!it.dirty) { // borrada desde otro dispositivo
+        await DB.del(it.id);
+        const u = urls.get(it.id); if (u) Object.values(u).forEach(URL.revokeObjectURL); urls.delete(it.id);
+        items.splice(items.indexOf(it), 1);
+      }
+      continue;
+    }
+    if (!it.dirty && (it.order !== r.position || it.done !== r.done || it.note !== (r.note || ''))) {
+      Object.assign(it, { order: r.position, done: r.done, note: r.note || '' }); changed.push(it);
+    }
+  }
+  const fresh = rows.filter(r => !byId(r.id));
+  let n = 0;
+  for (const r of fresh) {
+    toast(`Descargando ${++n}/${fresh.length}…`);
+    try {
+      const [full, thumb] = await Promise.all(['full', 'thumb'].map(async k => (await okr(await fetch(pubUrl(r.id, k)))).blob()));
+      const it = { id: r.id, order: r.position, done: r.done, note: r.note || '', full, thumb, dirty: false, uploaded: true, v: 0 };
+      items.push(it); changed.push(it);
+    } catch (e) { console.error(e); }
+  }
+  items.sort((a, b) => a.order - b.order);
+  if (changed.length) await DB.put(changed);
+  render();
+}
+
 /* ---------- wiring ---------- */
 $('addBtn').onclick = () => $('file').click();
 $('file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
@@ -356,6 +465,12 @@ document.querySelectorAll('#filters .chip').forEach(c => c.onclick = () => {
   setFilter(c.dataset.f);
 });
 $('closeBtn').onclick = closeViewer;
+if (SYNC) {
+  $('syncBtn').classList.remove('hidden');
+  $('syncBtn').onclick = () => sync(true);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleSync(300); });
+  window.addEventListener('online', () => scheduleSync(300));
+}
 $('prevBtn').onclick = () => go(-1);
 $('nextBtn').onclick = () => go(1);
 $('doneBtn').onclick = toggleDone;
@@ -373,6 +488,7 @@ document.addEventListener('keydown', e => {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch (e) { toast('No se pudo abrir el almacenamiento'); }
   render();
+  scheduleSync(100);
 })();
 </script>
 </body>
