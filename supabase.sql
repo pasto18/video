@@ -17,3 +17,13 @@ insert into storage.buckets (id, name, public) values ('stills', 'stills', true)
 drop policy if exists "stills open" on storage.objects;
 create policy "stills open" on storage.objects for all
   using (bucket_id = 'stills') with check (bucket_id = 'stills');
+
+-- Lista de tomas (texto con checkboxes), una sola fila "main"
+create table if not exists lists (
+  id text primary key,
+  body text not null default '',
+  updated_at bigint not null default 0
+);
+alter table lists enable row level security;
+drop policy if exists "lists open" on lists;
+create policy "lists open" on lists for all using (true) with check (true);
