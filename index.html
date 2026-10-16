@@ -155,14 +155,22 @@ textarea::placeholder{color:var(--muted)}
 #lists .bar h3{margin:0;font-size:16px;font-weight:600}
 #lists .bar .chip{margin-right:8px}
 .lbody{flex:1;overflow-y:auto;padding:8px 16px calc(28px + env(safe-area-inset-bottom));width:100%;max-width:720px;margin:0 auto}
-.sec{margin-bottom:24px}
-.sec h2{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;letter-spacing:.06em;text-transform:uppercase;
-  color:var(--muted);margin:0 4px 8px;font-weight:600}
-.li{display:flex;align-items:center;gap:14px;padding:14px;border-radius:var(--r);background:var(--card);margin-bottom:8px;cursor:pointer;user-select:none}
-.box{flex:none;width:24px;height:24px;border-radius:8px;border:2px solid #4a4a50;display:grid;place-items:center;color:#06210f;font-size:15px;font-weight:700}
+.li{display:flex;align-items:center;gap:2px;padding:2px 6px 2px 2px;border-radius:var(--r);background:var(--card);margin-bottom:8px}
+.cb{flex:none;width:46px;height:46px;display:grid;place-items:center}
+.box{width:24px;height:24px;border-radius:8px;border:2px solid #4a4a50;display:grid;place-items:center;color:#06210f;font-size:15px;font-weight:700}
 .li.on .box{background:var(--ok);border-color:var(--ok)}
-.li.on span{color:var(--muted);text-decoration:line-through}
-#listTxt{flex:1;height:auto;width:calc(100% - 32px);max-width:720px;margin:8px auto calc(16px + env(safe-area-inset-bottom));line-height:1.6}
+.tx,.ti{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--text);font-family:inherit;padding:10px 4px}
+.tx{font-size:17px}
+.tx::placeholder,.ti::placeholder{color:#55555c}
+.li.on .tx{color:var(--muted);text-decoration:line-through}
+.rh{display:flex;align-items:center;gap:8px;margin:24px 2px 8px}
+.rh:first-child{margin-top:6px}
+.ti{font-size:21px;font-weight:600;padding:6px 4px}
+.cnt{color:var(--muted);font-size:13px}
+.rm{flex:none;width:32px;height:32px;border-radius:50%;color:var(--muted);opacity:0;font-size:14px}
+[data-i]:focus-within .rm{opacity:1}
+.addbar{display:flex;gap:10px;justify-content:center;padding:10px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+.addbar button{height:44px;padding:0 20px;border-radius:99px;background:var(--card);font-size:15px}
 .pill svg{width:22px;height:22px}
 #syncBtn.spin{animation:spin 1s linear infinite;color:var(--text)}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -225,10 +233,13 @@ textarea::placeholder{color:var(--muted)}
   <div class="bar">
     <button class="ib" id="listClose" aria-label="Cerrar">✕</button>
     <h3>Lista de tomas</h3>
-    <button class="chip" id="listEditBtn">Editar</button>
+    <span style="width:44px"></span>
   </div>
   <div class="lbody" id="lbody"></div>
-  <textarea id="listTxt" class="hidden" spellcheck="false" placeholder="Título&#10;- [ ] toma uno&#10;- [ ] toma dos"></textarea>
+  <div class="addbar">
+    <button id="addItem">＋ Toma</button>
+    <button id="addTitle">＋ Título</button>
+  </div>
 </div>
 
 <input type="file" id="file" accept="image/*" multiple hidden>
@@ -638,40 +649,60 @@ const ls = {
   set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} },
 };
 let listText = ls.get('listText'); if (listText === null) listText = SEED;
-let listAt = +ls.get('listAt') || 0, listDirty = ls.get('listDirty') === '1', listEdit = false;
+let listAt = +ls.get('listAt') || 0, listDirty = ls.get('listDirty') === '1';
 const listOpen = () => !$('lists').classList.contains('hidden');
 function saveList() { ls.set('listText', listText); ls.set('listAt', listAt); ls.set('listDirty', listDirty ? '1' : '0'); }
 function editList(text) { listText = text; listAt = Date.now(); listDirty = true; saveList(); scheduleSync(); }
-function parseList(text) {
-  const secs = []; let cur = null;
-  text.split('\n').forEach((raw, i) => {
+let rows = [], lastRow = -1;
+function parseRows(text) {
+  const out = [];
+  text.split('\n').forEach(raw => {
     const line = raw.trim(); if (!line) return;
     const m = line.match(/^[-*]\s+(?:\[([ xX]?)\]\s*)?(.+)$/);
-    if (m) {
-      if (!cur) secs.push(cur = { title: '', items: [] });
-      cur.items.push({ i, text: m[2], done: /x/i.test(m[1] || '') });
-    } else secs.push(cur = { title: line.replace(/^#+\s*/, ''), items: [] });
+    out.push(m ? { t: 'i', text: m[2], done: /x/i.test(m[1] || '') } : { t: 'h', text: line.replace(/^#+\s*/, '') });
   });
-  return secs.filter(x => x.title || x.items.length);
+  return out;
 }
-function renderList() {
-  const secs = parseList(listText), box = $('lbody');
-  box.innerHTML = secs.length ? secs.map(sec => {
-    const n = sec.items.filter(i => i.done).length;
-    return `<div class="sec">${sec.title ? `<h2><span>${esc(sec.title)}</span><span>${n}/${sec.items.length}</span></h2>` : ''}` +
-      sec.items.map(it => `<div class="li${it.done ? ' on' : ''}" data-i="${it.i}" data-d="${it.done ? 1 : 0}"><div class="box">${it.done ? '✓' : ''}</div><span>${esc(it.text)}</span></div>`).join('') + '</div>';
-  }).join('') : '<div class="empty">Sin lista todavía.<br>Toca “Editar” para escribirla.</div>';
-  box.querySelectorAll('.li').forEach(el => el.onclick = () => {
-    const lines = listText.split('\n'), i = +el.dataset.i, done = el.dataset.d === '1';
-    lines[i] = lines[i].replace(/^(\s*[-*]\s+)(?:\[[ xX]?\]\s*)?/, (_, p) => p + (done ? '[ ] ' : '[x] '));
-    editList(lines.join('\n')); renderList();
+// el texto sigue guardándose como "Título" / "- [ ] toma" (así se sincroniza), pero nunca hay que escribirlo a mano
+const commitRows = () => editList(rows.filter(r => r.text.trim())
+  .map(r => r.t === 'h' ? r.text.trim() : `- [${r.done ? 'x' : ' '}] ${r.text.trim()}`).join('\n'));
+function insertRow(at, row) { rows.splice(at, 0, row); renderRows(at); commitRows(); }
+function removeRow(i, focusPrev) { rows.splice(i, 1); commitRows(); renderRows(focusPrev && i > 0 ? i - 1 : null); }
+function renderRows(focus) {
+  const box = $('lbody'), top = box.scrollTop, cnt = {};
+  let cur = -1;
+  rows.forEach((r, i) => {
+    if (r.t === 'h') { cur = i; cnt[i] = [0, 0]; }
+    else if (cur >= 0) { cnt[cur][1]++; if (r.done) cnt[cur][0]++; }
   });
+  box.innerHTML = rows.length ? rows.map((r, i) => r.t === 'h'
+    ? `<div class="rh" data-i="${i}"><input class="ti" value="${esc(r.text)}" placeholder="Título" enterkeyhint="next" autocomplete="off"><span class="cnt">${cnt[i][1] ? cnt[i][0] + '/' + cnt[i][1] : ''}</span><button class="rm" tabindex="-1" aria-label="Quitar">✕</button></div>`
+    : `<div class="li${r.done ? ' on' : ''}" data-i="${i}"><button class="cb" aria-label="Marcar"><div class="box">${r.done ? '✓' : ''}</div></button><input class="tx" value="${esc(r.text)}" placeholder="Toma" enterkeyhint="next" autocomplete="off"><button class="rm" tabindex="-1" aria-label="Quitar">✕</button></div>`).join('')
+    : '<div class="empty">Sin tomas todavía.<br>Añade un título o una toma.</div>';
+  box.scrollTop = top;
+  box.querySelectorAll('[data-i]').forEach(el => {
+    const i = +el.dataset.i, inp = el.querySelector('input');
+    inp.oninput = () => { rows[i].text = inp.value; commitRows(); };
+    inp.onfocus = () => { lastRow = i; };
+    inp.onkeydown = e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (!inp.value.trim() && rows[i].t === 'i') removeRow(i, false); // Enter en una vacía: termina la lista
+        else insertRow(i + 1, { t: 'i', text: '', done: false });
+      } else if (e.key === 'Backspace' && !inp.value) { e.preventDefault(); removeRow(i, true); }
+    };
+    const cb = el.querySelector('.cb');
+    if (cb) cb.onclick = () => { rows[i].done = !rows[i].done; commitRows(); renderRows(); };
+    el.querySelector('.rm').onclick = () => removeRow(i, false);
+  });
+  if (focus != null) {
+    const inp = box.querySelector(`[data-i="${focus}"] input`);
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  }
 }
-function setListEdit(on) {
-  listEdit = on;
-  $('lbody').classList.toggle('hidden', on); $('listTxt').classList.toggle('hidden', !on);
-  $('listEditBtn').textContent = on ? 'Listo' : 'Editar';
-  if (on) { $('listTxt').value = listText; $('listTxt').focus(); } else renderList();
+function openList() {
+  $('lists').classList.remove('hidden');
+  rows = parseRows(listText); lastRow = -1; renderRows();
 }
 async function syncList() {
   try {
@@ -684,9 +715,9 @@ async function syncList() {
         headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
         body: JSON.stringify({ id: 'main', body, updated_at: v }) }));
       if (listAt === v) { listDirty = false; saveList(); }
-    } else if (rem && rem.updated_at > listAt && !listEdit) {
+    } else if (rem && rem.updated_at > listAt && !(listOpen() && $('lbody').contains(document.activeElement))) {
       listText = rem.body; listAt = rem.updated_at; saveList();
-      if (listOpen()) renderList();
+      if (listOpen()) { rows = parseRows(listText); renderRows(); }
     }
   } catch (e) {
     console.error(e);
@@ -827,10 +858,10 @@ document.querySelectorAll('#filters .chip').forEach(c => c.onclick = () => {
   setFilter(c.dataset.f);
 });
 $('closeBtn').onclick = closeViewer;
-$('listBtn').onclick = () => { $('lists').classList.remove('hidden'); setListEdit(false); };
-$('listClose').onclick = () => { if (listEdit) setListEdit(false); $('lists').classList.add('hidden'); };
-$('listEditBtn').onclick = () => setListEdit(!listEdit);
-$('listTxt').oninput = e => editList(e.target.value);
+$('listBtn').onclick = openList;
+$('listClose').onclick = () => $('lists').classList.add('hidden');
+$('addItem').onclick = () => insertRow(lastRow >= 0 && lastRow < rows.length ? lastRow + 1 : rows.length, { t: 'i', text: '', done: false });
+$('addTitle').onclick = () => insertRow(rows.length, { t: 'h', text: '' });
 $('selDel').onclick = deleteSelected;
 $('selClear').onclick = () => { sel.clear(); paintSel(); };
 {
